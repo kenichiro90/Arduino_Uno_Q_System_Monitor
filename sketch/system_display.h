@@ -40,7 +40,7 @@ extern DisplayState g_display_state;
 
 // --- API ---
 void system_display_init(void);
-void system_display_push_sample(const SystemStats* stats);
+void system_display_push_sample(MetricType type, float value);
 void draw_bar_graph_on_matrix(const uint8_t* heights);
 void buffer_to_heights(const MetricBuffer* buffer, uint8_t* heights);
 void system_display_set_brightness(uint8_t brightness);

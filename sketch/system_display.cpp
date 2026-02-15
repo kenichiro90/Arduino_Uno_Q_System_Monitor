@@ -171,18 +171,17 @@ void system_display_init(void) {
 }
 
 /**
- * Appends system statistics to the metric buffers.
+ * Appends a single metric value to the specified ring buffer.
  *
- * @param stats Pointer to SystemStats containing CPU, memory, disk percentages
+ * @param type Metric type (METRIC_CPU, METRIC_MEMORY, or METRIC_DISK)
+ * @param value Metric value (percentage, 0.0-100.0)
  *
  * @remarks
- * Each metric (CPU, memory, disk) is stored in an independent ring buffer.
+ * Only the currently selected metric is pushed, keeping other buffers unchanged.
  */
-void system_display_push_sample(const SystemStats* stats) {
-  if (!stats) return;
-  metric_buffer_push(&g_display_state.metrics[METRIC_CPU], stats->cpu);
-  metric_buffer_push(&g_display_state.metrics[METRIC_MEMORY], stats->memory);
-  metric_buffer_push(&g_display_state.metrics[METRIC_DISK], stats->disk);
+void system_display_push_sample(MetricType type, float value) {
+  if (type >= METRIC_COUNT) return;
+  metric_buffer_push(&g_display_state.metrics[type], value);
 }
 
 /**
@@ -220,6 +219,8 @@ void draw_bar_graph_on_matrix(const uint8_t* heights) {
  *
  * @remarks
  * Maps recent history from oldest to newest across columns 0 to kMatrixWidth-1.
+ * Column 0 (leftmost) displays the oldest value (recent_index=12).
+ * Column 12 (rightmost) displays the most recent value (recent_index=0).
  */
 void buffer_to_heights(const MetricBuffer* buffer, uint8_t* heights) {
   size_t recent_index = 0;

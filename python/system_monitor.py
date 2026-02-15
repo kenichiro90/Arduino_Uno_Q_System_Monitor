@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 class SystemMonitor:
     """Linux システムモニタリング情報を収集するクラス"""
     
-    # ログ出力周期制御（5秒ごと）
+    # ログ出力周期制御（1秒ごと）
     _last_log_time: float = 0
-    _log_interval: float = 5.0  # 秒
+    _log_interval: float = 1.0  # 秒
     
     @classmethod
     def _should_log(cls) -> bool:
@@ -105,7 +105,7 @@ class SystemMonitor:
         # ネットワーク（削除済み機能 - 互換性のため 0.0 固定）
         stats["network_rx"] = 0.0
         
-        # ログ出力（5秒ごと）
+        # ログ出力（1秒ごと）
         if cls._should_log():
             timestamp = time.strftime('%H:%M:%S')
             print(

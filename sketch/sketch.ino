@@ -4,7 +4,7 @@
 #include <string.h>
 #include "system_display.h"
 
-static const size_t kJsonBufferSize = 256;
+static const size_t kJsonBufferSize = 128;
 static const size_t kCmdBufferSize = 64;
 static const size_t kResponseBufferSize = 64;
 static const size_t kHelpBufferSize = 512;
@@ -82,10 +82,15 @@ static void rpc_state_set_json(const String& json_data) {
  * @param json_data JSON formatted system statistics
  *
  * @return Response string "OK"
+ *
+ * @remarks
+ * This handler is called from high-priority RPC thread.
+ * Only performs minimal work (set flag and store data).
+ * Do not use Monitor.print() here to avoid deadlock.
  */
 String receive_system_stats(String json_data) {
   rpc_state_set_json(json_data);
-  return "OK";
+  return String("OK");
 }
 
 /**
@@ -186,35 +191,26 @@ static bool parse_float_field(const char* json, const char* key, float* value_ou
  * @param json JSON string containing system metrics
  * @param stats Output structure for parsed data
  *
- * @return true if at least one field was parsed; false if all failed
+ * @return true if ALL fields were parsed successfully; false otherwise
  *
  * @remarks
- * Tolerates partial data. Parses CPU, memory, and disk fields independently.
+ * All-or-nothing update. If any field fails to parse, stats is unchanged.
  */
 static bool update_stats_from_json(const char* json, SystemStats* stats) {
-  bool any = false;
   float cpu = 0.0f;
   float memory = 0.0f;
   float disk = 0.0f;
 
   if (!json || !stats) return false;
 
-  if (parse_float_field(json, "\"cpu\"", &cpu)) {
-    stats->cpu = cpu;
-    any = true;
-  }
+  if (!parse_float_field(json, "\"cpu\"", &cpu)) return false;
+  if (!parse_float_field(json, "\"memory\"", &memory)) return false;
+  if (!parse_float_field(json, "\"disk\"", &disk)) return false;
 
-  if (parse_float_field(json, "\"memory\"", &memory)) {
-    stats->memory = memory;
-    any = true;
-  }
-
-  if (parse_float_field(json, "\"disk\"", &disk)) {
-    stats->disk = disk;
-    any = true;
-  }
-
-  return any;
+  stats->cpu = cpu;
+  stats->memory = memory;
+  stats->disk = disk;
+  return true;
 }
 
 /**
@@ -513,7 +509,7 @@ void setup() {
   Monitor.begin();
   delay(kSetupDelayMs);
 
-  Bridge.provide_safe("receive_system_stats", receive_system_stats);
+  Bridge.provide("receive_system_stats", receive_system_stats);
 
   system_display_init();
   system_display_set_brightness(g_display_config.brightness);
@@ -526,34 +522,47 @@ void setup() {
  * Arduino main loop - executes repeatedly.
  *
  * @remarks
- * Handles user input, receives RPC data, updates display metrics,
- * and renders bar graphs at configured intervals.
+ * Implements two asynchronous tasks:
+ * 1. Data Reception Task: Updates ring buffer immediately when new RPC data arrives
+ * 2. Display Task: Renders LED matrix at fixed intervals (period)
+ * 
+ * This architecture ensures:
+ * - High-frequency sampling driven by Python's transmission rate
+ * - Fixed-period display updates independent of Python's timer precision
+ * - No cumulative timing drift in long-term operation
  */
 void loop() {
   char json_buffer[kJsonBufferSize];
-  uint32_t now;
-  MetricType metric;
+  uint32_t now = 0;
+  MetricType metric = METRIC_CPU;
   uint8_t heights[kMatrixWidth];
+  bool stats_updated = false;
+  float push_value = 0.0f;
 
   process_monitor_input();
 
+  if (g_display_config.mode == DISPLAY_MEMORY) metric = METRIC_MEMORY;
+  else if (g_display_config.mode == DISPLAY_DISK) metric = METRIC_DISK;
+
   if (fetch_latest_json(json_buffer, sizeof(json_buffer))) {
-    update_stats_from_json(json_buffer, &g_last_stats);
+    if (update_stats_from_json(json_buffer, &g_last_stats)) {
+      stats_updated = true;
+    }
   }
 
   now = millis();
-  if (now - g_display_config.last_sample_ms >= g_display_config.update_period_ms) {
+  if (stats_updated && (now - g_display_config.last_sample_ms >= g_display_config.update_period_ms)) {
     g_display_config.last_sample_ms = now;
-    system_display_push_sample(&g_last_stats);
+
+    push_value = g_last_stats.cpu;
+    if (metric == METRIC_MEMORY) push_value = g_last_stats.memory;
+    else if (metric == METRIC_DISK) push_value = g_last_stats.disk;
+
+    system_display_push_sample(metric, push_value);
   }
 
   if (now - g_display_config.last_draw_ms >= g_display_config.update_period_ms) {
     g_display_config.last_draw_ms = now;
-
-    metric = METRIC_CPU;
-    if (g_display_config.mode == DISPLAY_MEMORY) metric = METRIC_MEMORY;
-    else if (g_display_config.mode == DISPLAY_DISK) metric = METRIC_DISK;
-
     buffer_to_heights(&g_display_state.metrics[metric], heights);
     draw_bar_graph_on_matrix(heights);
   }
